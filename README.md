@@ -67,10 +67,4 @@ Each technology has its own dedicated documentation file with comprehensive info
 
 Feel free to suggest improvements or additional technologies that would be useful to include in this repository.
 
-## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-# Devops-notes
-# Devops-notes
-# Devops-notes
-# Devops-notes
