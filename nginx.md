@@ -1144,3 +1144,226 @@ server {
 - Check the access and error logs for clues about request processing and errors.
 - Use tools like `curl` or `wget` to test requests and inspect responses.
 - For upstream server issues, check the health of the backend servers and their logs.
+
+## Major Production Errors and Recovery
+
+This section details critical production errors that can severely impact your service, including real-world scenarios, impact analysis, and proven recovery strategies.
+
+### 500 Internal Server Error
+
+**Scenario 1: Application Code Failure**
+- **Incident**: During a peak shopping period, our e-commerce platform began serving 500 errors to approximately 70% of customers.
+- **Impact**: 43% drop in conversion rate, estimated revenue loss of $27,000 per hour.
+- **Root Cause**: A code deployment introduced a memory leak in the PHP application, causing worker processes to exhaust available memory.
+- **Solution**:
+  ```bash
+  # First, verify the issue in NGINX and application logs
+  tail -f /var/log/nginx/error.log
+  tail -f /var/log/php/php-fpm.log
+  
+  # Implement immediate mitigation by increasing PHP memory limit
+  sed -i 's/memory_limit = 128M/memory_limit = 256M/' /etc/php/7.4/fpm/php.ini
+  systemctl restart php7.4-fpm
+  
+  # Roll back the problematic deployment
+  cd /var/www/html
+  git revert HEAD --no-edit
+  
+  # Verify services have recovered
+  systemctl status nginx php7.4-fpm
+  ```
+- **Prevention**: Implemented pre-deployment memory profiling and gradual rollout strategy with automated canary analysis.
+
+**Scenario 2: Database Connection Exhaustion**
+- **Incident**: After database maintenance, all API endpoints began returning 500 errors.
+- **Impact**: Complete service outage for 17 minutes, affecting 100% of users.
+- **Root Cause**: Connection pool settings were incorrectly configured, causing connections to be held open without being released.
+- **Solution**:
+  ```bash
+  # Check NGINX and application connection status
+  netstat -anp | grep ESTABLISHED | wc -l
+  
+  # Identify connection leaks
+  netstat -anp | grep ESTABLISHED | grep mysql
+  
+  # Adjust connection pool settings in the application
+  vim /etc/app/config.json  # Reduce max connections and add timeout
+  
+  # Restart application servers with new settings
+  systemctl restart app-server
+  
+  # Monitor recovery
+  watch -n1 "netstat -anp | grep ESTABLISHED | wc -l"
+  ```
+- **Prevention**: Implemented connection pool monitoring with alerts for unusual growth patterns and automatic circuit breaking.
+
+### 502 Bad Gateway
+
+**Scenario: Upstream Server Overload**
+- **Incident**: Following a marketing campaign, our service began intermittently responding with 502 errors.
+- **Impact**: 30% of requests failing during peak periods, resulting in negative social media mentions and customer complaints.
+- **Root Cause**: The Node.js application servers were overwhelmed, causing request timeouts to NGINX.
+- **Solution**:
+  ```bash
+  # Increase timeout values in NGINX configuration
+  vim /etc/nginx/conf.d/upstream.conf
+  
+  # Add these directives
+  proxy_connect_timeout 300s;
+  proxy_send_timeout 300s;
+  proxy_read_timeout 300s;
+  
+  # Implement request queuing
+  limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+  
+  # Apply the rate limiting
+  location /api/ {
+      limit_req zone=api_limit burst=20 nodelay;
+      proxy_pass http://backend_servers;
+  }
+  
+  # Test and reload NGINX
+  nginx -t && systemctl reload nginx
+  ```
+- **Prevention**: Implemented auto-scaling based on CPU and request queue metrics, and added a CDN for static content.
+
+### 504 Gateway Timeout
+
+**Scenario: Database Query Timeouts**
+- **Incident**: Users reported inability to complete checkout process, with requests hanging for 30+ seconds before failing.
+- **Impact**: 60% cart abandonment rate, double the normal rate.
+- **Root Cause**: A missing database index caused product inventory queries to perform full table scans.
+- **Solution**:
+  ```bash
+  # Identify slow queries
+  mysql -e "SHOW FULL PROCESSLIST" | grep -i inventory
+  
+  # Create missing index (through database migration)
+  mysql -e "CREATE INDEX idx_product_inventory ON products(inventory_id);"
+  
+  # Increase NGINX timeouts temporarily while the database recovers
+  vim /etc/nginx/conf.d/timeouts.conf
+  # Add:
+  proxy_read_timeout 120s;
+  
+  # Reload NGINX
+  nginx -t && systemctl reload nginx
+  
+  # Monitor query performance
+  watch -n5 "mysql -e 'SHOW FULL PROCESSLIST' | grep -i inventory | wc -l"
+  ```
+- **Prevention**: Implemented query performance monitoring, automatic slow query detection, and required database index review for all schema changes.
+
+### 403 Forbidden (WAF Blocking)
+
+**Scenario: False Positive WAF Rules**
+- **Incident**: After enabling ModSecurity WAF, legitimate customer requests were blocked with 403 errors.
+- **Impact**: 15% of mobile users unable to access the service, increasing customer support volume by 300%.
+- **Root Cause**: Overly aggressive WAF rule was blocking certain mobile user-agent strings.
+- **Solution**:
+  ```bash
+  # Identify the blocking rules
+  grep -i denied /var/log/modsec_audit.log | tail -50
+  
+  # Create a custom exception rule
+  cat << EOF > /etc/nginx/modsec/custom-rules.conf
+  SecRule REQUEST_HEADERS:User-Agent "@contains MobileApp/2.1" \
+    "id:1000001,\
+    phase:1,\
+    pass,\
+    nolog,\
+    ctl:ruleRemoveById=941100"
+  EOF
+  
+  # Test and reload
+  nginx -t && systemctl reload nginx
+  
+  # Monitor false positive rate
+  tail -f /var/log/modsec_audit.log | grep -i denied
+  ```
+- **Prevention**: Implemented a WAF testing environment with real traffic replay and rule tuning based on false positive analysis.
+
+### Network-Level Failures
+
+**Scenario: DNS Resolution Failure**
+- **Incident**: NGINX began failing to proxy requests to third-party API services despite no changes to our configuration.
+- **Impact**: Payment processing failed for 40% of transactions, resulting in lost orders.
+- **Root Cause**: Our DNS provider experienced an outage, causing DNS resolution failures for upstream hosts.
+- **Solution**:
+  ```bash
+  # Verify DNS resolution issues
+  dig payment-api.partner.com
+  
+  # Add static DNS entries to /etc/hosts as temporary fix
+  echo "203.0.113.54 payment-api.partner.com" >> /etc/hosts
+  
+  # Create local DNS cache with dnsmasq
+  apt-get update && apt-get install -y dnsmasq
+  
+  # Configure dnsmasq with external DNS providers
+  cat << EOF > /etc/dnsmasq.conf
+  no-resolv
+  server=8.8.8.8
+  server=1.1.1.1
+  EOF
+  
+  # Enable and start service
+  systemctl enable dnsmasq && systemctl start dnsmasq
+  
+  # Update resolv.conf to use local DNS
+  echo "nameserver 127.0.0.1" > /etc/resolv.conf
+  ```
+- **Prevention**: Implemented redundant DNS providers, local DNS caching, and periodic DNS resolution health checks.
+
+### TLS Certificate Expiry
+
+**Scenario: Expired SSL Certificate**
+- **Incident**: At midnight, all secure connections began failing with browser certificate warnings.
+- **Impact**: 95% drop in traffic as users encountered scary security warnings. Brand reputation damage on social media.
+- **Root Cause**: SSL certificate expired and auto-renewal failed due to DNS verification issues.
+- **Solution**:
+  ```bash
+  # Verify certificate expiration
+  openssl x509 -enddate -noout -in /etc/nginx/ssl/example.com.crt
+  
+  # Generate emergency certificate with Let's Encrypt
+  certbot certonly --standalone -d example.com -d www.example.com
+  
+  # Update NGINX configuration with new certificate
+  vim /etc/nginx/conf.d/ssl.conf
+  # Update paths:
+  # ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;
+  # ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+  
+  # Test and reload
+  nginx -t && systemctl reload nginx
+  ```
+- **Prevention**: Implemented certificate expiration monitoring with 30/14/7 day alerts, automated renewal testing, and documented emergency certificate procedures.
+
+### Out of File Descriptors
+
+**Scenario: File Descriptor Exhaustion**
+- **Incident**: During high traffic period, NGINX began rejecting connections with "too many open files" errors.
+- **Impact**: Intermittent 503 errors affecting approximately 25% of users.
+- **Root Cause**: Default system limits for file descriptors were too low for our traffic volume.
+- **Solution**:
+  ```bash
+  # Check current limits
+  cat /proc/$(cat /var/run/nginx.pid)/limits | grep "open files"
+  
+  # Increase system-wide limits temporarily
+  echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+  sysctl -p
+  
+  # Update NGINX service file limits
+  mkdir -p /etc/systemd/system/nginx.service.d
+  cat << EOF > /etc/systemd/system/nginx.service.d/limits.conf
+  [Service]
+  LimitNOFILE=500000
+  EOF
+  
+  # Reload systemd and restart NGINX
+  systemctl daemon-reload
+  systemctl restart nginx
+  ```
+- **Prevention**: Added file descriptor usage to monitoring dashboards, and adjusted worker_connections and worker_processes based on load testing results.

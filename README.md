@@ -24,6 +24,29 @@ Terraform is an open-source Infrastructure as Code (IaC) tool that allows you to
 - Comprehensive state tracking
 - Modular, reusable configurations
 
+### Version Control & Collaboration
+
+#### [Git & GitHub](./git.md)
+
+Git is a distributed version control system, and GitHub is a web-based hosting service for Git repositories. The comprehensive guide includes:
+
+- Setup and configuration
+- Basic and advanced workflows
+- Branching and merging strategies
+- Rebasing techniques and best practices
+- Working with remote repositories
+- Tag and release management
+- Advanced techniques like stashing, cherry-picking, and reflog
+- GitHub-specific features like pull requests, actions, and pages
+
+**Key features:**
+- Distributed version control with full history
+- Branching and merging capabilities
+- Support for collaborative workflows
+- Extensive tools for fixing mistakes
+- GitHub integration for code hosting and collaboration
+- Rich ecosystem of integrations and tools
+
 ### Web Servers & Proxies
 
 #### [NGINX](./nginx.md)
